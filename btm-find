@@ -1,0 +1,114 @@
+#!/bin/bash
+
+set -e
+
+flags=()
+single=''
+while :; do
+	case "$1" in
+	-h|--help)
+		echo "$0 [-ces] size minrep,index duplen minrun[,maxrun] [maxtry]"
+		exit
+		;;
+	-s)
+		single=y
+		shift
+		;;
+	-*s*)
+		single=y
+		flags+=("${1//s/}")
+		shift
+		;;
+	-*)
+		flags+=("$1")
+		shift
+		;;
+	*)
+		break
+		;;
+	esac
+done
+
+{ [ "$#" -ge 4 ] && [ "$#" -le 5 ]; } || { echo 'Invalid arguments' >&2; exit 1; }
+
+size=$1
+zarg=$2
+darg=$3
+targ=$4
+rarg=$5
+
+list() {
+	local cmd exc
+	
+	if [ "$1" = exec ]; then
+		exc=exec
+		shift
+	fi
+	cmd=(./btm-enum "${flags[@]}" -mfuas "$@" ${single:+-n 1}
+		-t "$targ" -z "$zarg" -d "$darg" ${rarg:+-r "$rarg"} "$size")
+	$exc "${cmd[@]}"
+}
+
+rank() {
+	sort -k 2nr -k 1 ${rarg:+-u} "$@"
+}
+
+if [ "$size" -lt 4 ]; then
+	list | rank
+	exit
+fi
+
+declare -A pids
+tmpdir=/tmp/btm-find-$$
+
+mapfile -t pfxs < <(./btm-enum "${flags[@]}" -mfu -l 3 "$size" \
+	| grep -v -e '^f' -e '^.0' -e 'f$' -e '^O.*1$' \
+		-e '[IO]1$' -e '^[IO].*[IO]0$' -e '^O.*o0$' \
+		-e '^I[IOo]0[io]0$' -e '^I[IiOo]o0$' -e '^If[io]0$')
+
+finalize() {
+	set +e
+	trap '' SIGINT SIGTERM
+	if [ "${#pids[@]}" -gt 0 ]; then
+		kill "${!pids[@]}" 2>/dev/null
+		wait "${!pids[@]}"
+	fi
+	[ -n "$single" ] || rank "$tmpdir"/*
+	rm -rf "$tmpdir"
+}
+
+reap() {
+	local pfx
+
+	wait -n -p pid "${!pids[@]}"
+	pfx=${pids[$pid]}
+	unset "pids[$pid]"
+	if [ -n "$single" ] && [ -n "$(<"$tmpdir/$pfx")" ]; then
+		cat "$tmpdir/$pfx"
+		exit
+	fi
+}
+
+trap : SIGINT SIGTERM
+trap finalize EXIT
+mkdir -p "$tmpdir"
+
+if [ -z "$rarg" ] || [ "$rarg" -ge 0 ]; then
+	n=$(nproc)
+else
+	n=$(("${#pfxs[@]}" + 1))
+fi
+
+for pfx in "${pfxs[@]}"; do
+	list exec -p "$pfx" >"$tmpdir/$pfx" &
+	pids[$!]=$pfx
+	n=$((n - 1))
+	if [ "$n" -eq 0 ]; then
+		reap
+		n=$((n + 1))
+	fi
+done
+
+while [ "${#pids[@]}" -gt 0 ]; do
+	reap
+done

@@ -1,0 +1,70 @@
+#!/bin/bash
+
+set -e
+
+case "$1" in
+-h|--help)
+	echo "$0 file nstep"
+	;;
+esac
+
+[ "$#" -eq 2 ] || { echo 'Invalid arguments'; exit 1; }
+
+file=$1
+narg=$2
+
+tmpdir=/tmp/btm-cont-$$
+
+finalize() {
+	set +e
+	trap '' SIGINT SIGTERM
+	[ "${#pids}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null
+	rm -rf "$tmpdir"
+}
+
+pids=()
+
+trap : SIGINT SIGTERM
+trap finalize EXIT
+mkdir -p "$tmpdir"
+
+
+read -r cnt <"$file"
+case "$cnt" in
+'step count:'*) ;;
+*) cnt='' ;;
+esac
+
+sed -n "${cnt:+1d;}"'/ finished /{p;d};q' "$file" >"$tmpdir"/fin
+
+{
+	n=$(wc -l <"$tmpdir"/fin)
+	[ -z "$cnt" ] || n=$((n + 1))
+	cd "$tmpdir"
+	tail -n "+$((n + 1))" | split -n r/"$(nproc)"
+	cd - >/dev/null
+}<"$file"
+
+if [ -n "$cnt" ]; then
+	cnt=${cnt#*: }
+else
+	cnt=0
+fi
+
+for f in "$tmpdir"/x*; do
+	<"$f" ./btm-emul -sc -b "$cnt" -n "$narg" >"$f.out" &
+	pids+=("$!")
+done
+
+wait
+unset pids
+
+cnt=$((cnt + narg))
+
+grep -Fh ' finished ' "$tmpdir"/*.out | sort -k 4n,4 | tee -a "$tmpdir"/fin
+
+{
+	echo "step count: $cnt"
+	cat "$tmpdir"/fin
+	sed -n 's/^.*: //p' "$tmpdir"/*.out
+}>"$file"

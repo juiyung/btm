@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -e
+
+flags=()
+while :; do
+	case "$1" in
+	-h|--help)
+		echo "$0 [-ce] size minrep,index duplen minrun mult dur"
+		exit
+		;;
+	-*)
+		flags+=("$1")
+		shift
+		;;
+	*)
+		break
+		;;
+	esac
+done
+
+[ "$#" -eq 6 ] || { echo 'Invalid arguments' >&2; exit 1; }
+
+size=$1
+zarg=$2
+darg=$3
+minrun=$4
+mult=$5
+dur=$6
+
+ddl=$((EPOCHSECONDS + dur))
+
+while [ "$dur" -gt 0 ]; do
+	res=$(timeout --foreground "$dur" ./btm-find -s "${flags[@]}" \
+		"$size" "$zarg" "$darg" "$minrun,$((minrun * mult))" -1) || exit
+	echo "$res"
+	minrun=$(("${res#*$'\t'}" + 1))
+	dur=$((ddl - EPOCHSECONDS))
+done
