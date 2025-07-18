@@ -1,0 +1,34 @@
+#!/bin/awk -E
+
+# ad-hoc cross-reference
+
+{
+	lines[NR] = $0
+}
+
+/\yTL{/ {
+	n = patsplit($0, a, /\yTL{[^}]+}/)
+	for (i = 1; i <= n; ++i) {
+		t = substr(a[i], 4, length(a[i]) - 4)
+		labels[t] = ++cnt
+	}
+}
+
+END {
+	for (i = 1; i <= NR; ++i) {
+		if (lines[i] !~ /\yT[LR]{/) {
+			print lines[i]
+			continue
+		}
+		n = patsplit(lines[i], a, /\yT[LR]{[^}]+}/, s)
+		out = s[0]
+		for (j = 1; j <= n; ++j) {
+			t = substr(a[j], 4, length(a[j]) - 4)
+			if (!(t in labels)) {
+				print "Not found:", t >>"/dev/stderr"
+			}
+			out = out labels[t] s[j]
+		}
+		print out
+	}
+}
